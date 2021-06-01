@@ -14,30 +14,26 @@ setwd(wdir)
 
 # PARAMS
 plotWindows <- FALSE
+experimentName <- "CV001N"
+#usedStrain <- "atcc_8492_concatenated"
 
-#results <- list()
-# for (sample in c("000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample1",
-#                "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2",
-#                "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample3",
-#                "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample4",
-#                "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample5",
-#                "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample6")) {
-for (sample in c("000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2",
-                 "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample3")) {
-#for (sample in c("CV001I10_all_forward_reads_concatenated_140000_reads_per_sample_filtered")) {
-  #depthInfo <- read_tsv(str_c("results/depth_HMW5KAFX2_CV001L3_21s001573-1-1_Voogdt_lane1", sample, "_sequence.tab"), col_names = F)
-  #depthInfo <- read_tsv(str_c("results/depth_CV001I10_all_forward_reads_concatenated_140000_reads_per_sample.tab"), col_names = F)
-  depthInfo <- read_tsv(str_c("results/depth_", sample, "_sequence.tab"), col_names = F)
+for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c("../data/experiments/", experimentName, "/raw")))) {
+  depthInfo <- read_tsv(str_c("../results/out/", experimentName, "/depth_", sample, ".tab"), col_names = F)
   depthInfo$X1 <- NULL
   colnames(depthInfo) <- c("Position", "coverage")
   
+  usedStrain <- str_c(tail(str_split(sample, pattern = "_")[[1]], 4), collapse = "_")
+  #sample <- str_replace(string = sample, pattern = usedStrain)
+  
   # Join genome nucleotides
-  if (sample == "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2" || sample == "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample3"){
-    print("Loading B. vulgatus genome...")
-    nucs <- read_tsv("/home/nicolai/for_carlos_4/B_vulgatus_genome_long_format.txt", col_names = F)
-  } else {
-    nucs <- read_tsv("/home/nicolai/for_carlos_4/B_uniformis_genome_long_format.txt", col_names = F)
-  }
+  # if (sample == "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2" || sample == "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample3"){
+  #   print("Loading B. vulgatus genome...")
+  #   nucs <- read_tsv("../data/genomes_long_format/B_vulgatus_genome_long_format.txt", col_names = F)
+  # } else {
+  #   nucs <- read_tsv("../data/genomes_long_format/B_uniformis_genome_long_format.txt", col_names = F)
+  # }
+  nucs <- read_tsv(str_c("../data/genomes_long_format/", usedStrain, "_long.txt"), col_names = F)
+  
   
   nucs <- nucs %>% rename(nucleotide = X1) %>% mutate(Position = 1:dim(nucs)[1])
   nucs$nucleotide <- map_chr(nucs$nucleotide, str_to_upper)
@@ -47,9 +43,9 @@ for (sample in c("000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2",
   depthInfo$TA <- c(TA, T)
   
   # Join insertion info file (basically parsed samtools view containing SAM flag, position, CIGAR flag, and sequence) and parse it further:
-  #readInsertion <- read_tsv(str_c("results/insertionInfoRaw_CV001I10_all_forward_reads_concatenated_140000_reads_per_sample.tab"), col_names = F)
-  readInsertion <- read_tsv(str_c("results/insertionInfoRaw_", sample, "_sequence.tab"), col_names = F)
+  readInsertion <- read_tsv(str_c("../results/out/", experimentName, "/insertionInfoRaw_", sample, ".tab"), col_names = F)
   # Keep only reads that MATCH PERFECTLY (using CIGAR flag).
+  # This doesn't generalize to all experiments..
   readInsertion <- readInsertion[str_ends(string = readInsertion$X5, pattern = "M") & str_length(readInsertion$X5) == 3, ]
   # Rename columns
   colnames(readInsertion) <- c("readName", "SAM", "Position", "MAPQ", "CIGAR", "read", "readLength")
@@ -59,7 +55,7 @@ for (sample in c("000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2",
   
   # Read barcode mapping file and left join it to readInsertion
   # reads_and_their_barcodes <- read_tsv(str_c("results/CV001I10_all_forward_reads_concatenated_140000_reads_per_sample_readname_barcode.tab"), col_names = F)
-  reads_and_their_barcodes <- read_tsv(str_c("results/", sample, "_sequence_readname_barcode.tab"), col_names = F)
+  reads_and_their_barcodes <- read_tsv(str_c("../results/out/", experimentName, "/readname_barcode_", sample, ".tab"), col_names = F)
   colnames(reads_and_their_barcodes) <- c("readName", "barcode")
   n <- dim(readInsertion)[1]
   readInsertion <- left_join(readInsertion, reads_and_their_barcodes, by = 'readName')
@@ -83,7 +79,7 @@ for (sample in c("000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2",
   readInsertion$InsertionPosition <- as.integer(readInsertion$InsertionPosition)
   # We've got everything, and things look good
   # observe InsertionPosition == 231 for sample HMW5KAFX2_CV001L3_21s001573-1-1_Voogdt_lane1Sample1_sequence to convince yourself that the parsing works.
-  readInsertion %>% filter(InsertionPosition == 231)
+  #readInsertion %>% filter(InsertionPosition == 231)
   
   # Remove read info, don't need it anymore
   readInsertion$read <- NULL
@@ -172,7 +168,8 @@ for (sample in c("000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2",
                       info = description[1],
                       geneName = geneName[1]))
   }
-  gff <- read_tsv("gff.parsed", col_names = F)
+  gff <- read_tsv(str_c("../data/prokka/", usedStrain, ".gff"), col_names = F, comment = "#")
+  gff <- gff[,c("X3", "X4", "X5", "X7", "X9")]
   colnames(gff) <- c("type", "start", "end", "strandedness", "description")
   # Runs a couple of minutes
   gff$geneName <- map_chr(gff$description, function(x) {
@@ -328,57 +325,41 @@ for (sample in c("000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2",
   #View(ORFEssentiallityUsingTAs)
   
   # Write out essential genes...
-  write_tsv(x = ORFEssentiallityUsingTAs %>% 
-              filter(isEssential) %>% 
-              pull(info) %>% 
-              map_chr(function(x) str_split(string = x, pattern = "ID=")[[1]][2]) %>% map_chr(function(x) str_split(string = x, pattern = ';')[[1]][1]) %>%
-              as.data.frame(), path = str_c("B_uniformis_essential_genes_", sample," .tab"), col_names = F)
+  #write_tsv(x = ORFEssentiallityUsingTAs %>% 
+  #            filter(isEssential) %>% 
+  #            pull(info) %>% 
+  #            map_chr(function(x) str_split(string = x, pattern = "ID=")[[1]][2]) %>% map_chr(function(x) str_split(string = x, pattern = ';')[[1]][1]) %>%
+  #            as.data.frame(), path = str_c("B_uniformis_essential_genes_", sample,".tab"), col_names = F)
   
   # And this is also cool to see (mean coverage over ORF and mean insertion over ORFs correlates very well!)
   plot(ORFEssentiallityUsingTAs$meanNumberInsertionsOverTAs, ORFEssentiallityUsingTAs$meanCoverage)
-  #write_tsv(x = ORFEssentiallityUsingTAs, path = "/home/nicolai/ORFInsertionStatistics.tsv")
-  #results[[length(results) + 1]] <- list(depthInfo, ORFEssentiallityUsingTAs, barcodesOverGenome)
-  save(sample, depthInfo, ORFEssentiallityUsingTAs, barcodesOverGenome, readInsertionWithBarcodes, file = str_c(sample, "__save.r"))
-  rm(depthInfo)
-  rm(ORFEssentiallityUsingTAs)
-  rm(barcodesOverGenome)
-  gc()
   
   
-  
-}
-
-for (sample in c("000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample1",
-               "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2",
-               "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample3",
-               "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample4",
-               "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample5",
-               "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample6")) {
-  if (sample == "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample3"){
+  # Get QC plots
+  if (!dir.exists(str_c("../plots/", experimentName, "/"))){
+    dir.create(str_c("../plots/", experimentName, "/"))
+  }
+  if (sample == "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample3_B_uniformis_atcc_8492"){
     expectedNumberOfInsertions <- 96
   } else {
     expectedNumberOfInsertions <- 190
   }
-  load(str_c(sample, "__save.r"))
   p <- ggplot(depthInfo %>% filter(numberInsertions > 0) %>% arrange(desc(numberInsertions)), aes(x = 1:length(numberInsertions), y = numberInsertions, group = 1))
   p <- p + scale_y_log10() + geom_line() + theme_embl() + geom_vline(xintercept = expectedNumberOfInsertions)
-  p
-  ggsave(filename = str_c(sample, "__numberInsertions.png"), width = 6, height = 4)
+  ggsave(plot = p, filename = str_c("../plots/", experimentName, "/", sample, "__numberInsertions.png"), width = 6, height = 4)
   #plots[[length(plots) + 1]] <- p
   
   # Get also total barcode counts ... 
   tmp <- readInsertionWithBarcodes %>% group_by(barcode) %>% nest() %>% mutate(numBarcodes = map_dbl(data, function(x) dim(x)[1])) %>% arrange(desc(numBarcodes))
   #p <- ggplot(tmp, aes(x = numBarcodes)) + geom_histogram(bins = 100)
   p <- ggplot(tmp, aes(x = numBarcodes)) + geom_histogram(bins = 100) + scale_x_log10()
-  p
-  ggsave(filename = str_c(sample, "__barCodeCount.png"), width = 6, height = 4)
+  ggsave(plot = p, filename = str_c("../plots/", experimentName, "/", sample, "__barCodeCount.png"), width = 6, height = 4)
   
   # ... and also an ordered lineplot
   p <- ggplot(tmp, aes(x = 1:length(numBarcodes), y = numBarcodes, group - 1)) + geom_line() + scale_y_log10()
   p <- p + geom_vline(xintercept = expectedNumberOfInsertions)
   p <- p + scale_x_log10()
-  p
-  ggsave(filename = str_c(sample, "__barCodeCountAsLinePlot.png"), width = 6, height = 4)
+  ggsave(plot = p, filename = str_c("../plots/", experimentName, "/", sample, "__barCodeCountAsLinePlot.png"), width = 6, height = 4)
   
   # And finally the last plot: For the [expectedNumberOfInsertions] top-most represented barcodes, count 
   # in how many unique sites you find it!
@@ -411,100 +392,113 @@ for (sample in c("000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample1",
                       nrow = length(unique(results$threshold)), scales = 'free')
   p <- p + scale_x_continuous(breaks = 0:10)
   p <- p + ylab("Count")
-  ggsave(filename = str_c(sample, "__distinctInsertionEventsPerBarcode.png"), width = 6, height = 12)
+  ggsave(filename = str_c("../plots/", experimentName, "/", sample, "__distinctInsertionEventsPerBarcode.png"), width = 6, height = 12)
+  
+  # Save files for manual interrogation later, clean up and go on.
+  save(sample, depthInfo, ORFEssentiallityUsingTAs, barcodesOverGenome, readInsertionWithBarcodes, file = str_c("../results/out/", experimentName, "/save_file", sample, ".rsave"))
+  rm(depthInfo)
+  rm(ORFEssentiallityUsingTAs)
+  rm(barcodesOverGenome)
+  rm(readInsertionWithBarcodes)
+  gc()
 }
 
-# Compare afonso's p-values to our essentially definition.
-tmp <- map(results, function(x) x[[2]] %>% select(prokkaID, numberInsertionsByTASites, totalInsertions, uniqueInsertions, isEssential))
-tmp[[1]]$type <- "our_agar"
-tmp[[2]]$type <- "our_liquid"
-afonso_agar <- read_csv("/home/nicolai/for_carlos_4/Bacteroides_uniformis_ATCC_8492_alldomains_agar.csv", comment = "#")
-afonso_liquid <- read_csv("/home/nicolai/for_carlos_4/Bacteroides_uniformis_ATCC_8492_alldomains_liquid.csv", comment = "#")
-tmp[[1]] <- left_join(tmp[[1]], afonso_agar %>% select(`Total Tn5 insertions`, `Essentiality p-value`, `Gene ID`, Essentiality), by = c("prokkaID" = "Gene ID"))
-tmp[[1]] <- left_join(tmp[[1]], afonso_liquid %>% select(`Total Tn5 insertions`, `Essentiality p-value`, `Gene ID`, Essentiality), by = c("prokkaID" = "Gene ID"), 
-                      suffix = c("_afonso_agar", "_afonso_liquid"))
-a <- tmp[[1]] %>% group_by(prokkaID) %>% summarize(uniqueInsertions = sum(uniqueInsertions), `Total Tn5 insertions` = sum(`Total Tn5 insertions_afonso_agar`, na.rm = T))
-cor(a$uniqueInsertions, a$`Total Tn5 insertions`)
-a <- tmp[[1]] %>% group_by(prokkaID) %>% summarize(uniqueInsertions = sum(uniqueInsertions), `Total Tn5 insertions` = sum(`Total Tn5 insertions_afonso_liquid`, na.rm = T))
-cor(a$totalInsertions, a$`Total Tn5 insertions`)
 
-tmp[[2]] <- left_join(tmp[[2]], afonso_agar %>% select(`Total Tn5 insertions`, `Essentiality p-value`, `Gene ID`, Essentiality), by = c("prokkaID" = "Gene ID"))
-tmp[[2]] <- left_join(tmp[[2]], afonso_liquid %>% select(`Total Tn5 insertions`, `Essentiality p-value`, `Gene ID`, Essentiality), by = c("prokkaID" = "Gene ID"), 
-                      suffix = c("_afonso_agar", "_afonso_liquid"))
-a <- tmp[[2]] %>% group_by(prokkaID) %>% summarize(totalInsertions = sum(totalInsertions), `Total Tn5 insertions` = sum(`Total Tn5 insertions_afonso_agar`, na.rm = T))
-cor(a$totalInsertions, a$`Total Tn5 insertions`)
-a <- tmp[[2]] %>% group_by(prokkaID) %>% summarize(totalInsertions = sum(totalInsertions), `Total Tn5 insertions` = sum(`Total Tn5 insertions_afonso_liquid`, na.rm = T))
-cor(a$totalInsertions, a$`Total Tn5 insertions`)
+##################################
+# HERE COMES SOME CODE FOR LATER #
+##################################
 
-
-# Generate Figure 2A/B/C from 
-# https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5099075/
-
-# A
-tmp <- map(results, function(x) x[[2]] %>% select(prokkaID, numberInsertionsByTASites, meanNumberInsertionsOverTAs, isEssential))
-tmp[[1]]$type <- "our_agar"
-tmp[[2]]$type <- "our_liquid"
-tmp <- full_join(tmp[[1]] %>% select(prokkaID, meanNumberInsertionsOverTAs, type), tmp[[2]] %>% select(prokkaID, meanNumberInsertionsOverTAs, type))
-tmp <- tmp %>% pivot_wider(id_cols = prokkaID, names_from = type, values_from = meanNumberInsertionsOverTAs)
-
-A <- ggplot(tmp, aes(x = log10(our_agar + 1), y = log10(our_liquid + 1))) + geom_point()
-
-# B
-tmp <- map(results, function(x) x[[2]] %>% select(prokkaID, numberInsertionsByTASites, totalInsertions, isEssential))
-tmp[[1]]$type <- "our_agar"
-tmp[[2]]$type <- "our_liquid"
-tmp <- full_join(tmp[[1]] %>% select(prokkaID, numberInsertionsByTASites, type), tmp[[2]] %>% select(prokkaID, numberInsertionsByTASites, type))
-#tmp <- tmp %>% pivot_wider(id_cols = prokkaID, names_from = type, values_from = totalInsertions)
-
-B <- ggplot(tmp, aes(x = numberInsertionsByTASites, fill = type)) + geom_histogram(alpha = 0.3, position = 'identity', bins = 200)
-B <- B + xlab("Mean number of\ninsertion events per ORF")
-B1 <- ggplot(tmp, aes(x = numberInsertionsByTASites, fill = type)) + geom_histogram(alpha = 0.3, position = 'identity', bins = 50) + xlim(c(0, 100))
-B1 <- B1 + xlab("Mean number of\ninsertion events per ORF")
-
-# C (might be a bit more complicated)
-tmp <- map(results, function(x) x[[1]])
-# This seems to run for quite a bit.
-tmp <- map(tmp, function(x) {
-  x$Position <-  factor(x$Position, levels = x$Position)
-  return(x)
-})
-tmp <- map(tmp, function(x) {
-  x$numberInsertionsRel <- x$numberInsertions/sum(x$numberInsertions)
-  return(x)
-})
-do_rarefy <- function(df, depthToRarefy) {
-  print(sum(df$numberInsertionsRel))
-  stopifnot(near(sum(df$numberInsertionsRel), 1))
-  tmp <- sample(x = df$Position, size = depthToRarefy, replace = T, prob = df$numberInsertionsRel)
-  return(length(unique(tmp)))
-}
-
-# Have finer curve at start...
-rarefy <- data.frame(subsample_depth = c(seq(from = 100 , to = 0.25 * sum(tmp[[1]]$numberInsertions), length.out = 50),
-                                         seq(from = 0.25 * sum(tmp[[1]]$numberInsertions), to = 0.5 * sum(tmp[[1]]$numberInsertions), length.out = 7)))
-rarefy$subsample_depth <- round(rarefy$subsample_depth)
-rarefy$subsample_depth_percentage_of_all_insertion_events <- (rarefy$subsample_depth/sum(tmp[[1]]$numberInsertions)) * 100
-rarefy$type <- "our_agar"
-tmpp <- data.frame(subsample_depth = c(seq(from = 100, to = 0.25 * sum(tmp[[1]]$numberInsertions), length.out = 50),
-                                       seq(from = 0.25 * sum(tmp[[2]]$numberInsertions), to = 0.5 * sum(tmp[[2]]$numberInsertions), length.out = 7)))
-tmpp$subsample_depth <- round(tmpp$subsample_depth)
-tmpp$subsample_depth_percentage_of_all_insertion_events <- (tmpp$subsample_depth/sum(tmp[[2]]$numberInsertions)) * 100
-tmpp$type <- "our_liquid"
-rarefy <- rbind(rarefy, tmpp)
-names(tmp) <- c("our_agar", "our_liquid")
-
-rarefy <- rarefy %>% mutate(uniqueInsertionSites = map2_dbl(subsample_depth, type, function(x, y) do_rarefy(df = tmp[[y]], x)))
-
-C <- ggplot(rarefy, aes(x = subsample_depth_percentage_of_all_insertion_events, y = uniqueInsertionSites, color = type, group = type)) + geom_line()
-
-C1 <- ggplot(rarefy, aes(x = subsample_depth, y = uniqueInsertionSites, color = type, group = type)) + geom_line()
-
-A <- A + theme_embl()
-B <- B + theme_embl()
-B1 <- B1 + theme_embl()
-C <- C + theme_embl()
-C1 <- C1 + theme_embl()
-
-p <- A + (B/B1) + C + C1 + plot_layout(ncol = 4)
-ggsave(filename = "/home/nicolai/for_carlos_4/Fig2abc.pdf", plot = p, width = 15, height = 2.9)
+# # Compare afonso's p-values to our essentially definition.
+# tmp <- map(results, function(x) x[[2]] %>% select(prokkaID, numberInsertionsByTASites, totalInsertions, uniqueInsertions, isEssential))
+# tmp[[1]]$type <- "our_agar"
+# tmp[[2]]$type <- "our_liquid"
+# afonso_agar <- read_csv("/home/nicolai/for_carlos_4/Bacteroides_uniformis_ATCC_8492_alldomains_agar.csv", comment = "#")
+# afonso_liquid <- read_csv("/home/nicolai/for_carlos_4/Bacteroides_uniformis_ATCC_8492_alldomains_liquid.csv", comment = "#")
+# tmp[[1]] <- left_join(tmp[[1]], afonso_agar %>% select(`Total Tn5 insertions`, `Essentiality p-value`, `Gene ID`, Essentiality), by = c("prokkaID" = "Gene ID"))
+# tmp[[1]] <- left_join(tmp[[1]], afonso_liquid %>% select(`Total Tn5 insertions`, `Essentiality p-value`, `Gene ID`, Essentiality), by = c("prokkaID" = "Gene ID"), 
+#                       suffix = c("_afonso_agar", "_afonso_liquid"))
+# a <- tmp[[1]] %>% group_by(prokkaID) %>% summarize(uniqueInsertions = sum(uniqueInsertions), `Total Tn5 insertions` = sum(`Total Tn5 insertions_afonso_agar`, na.rm = T))
+# cor(a$uniqueInsertions, a$`Total Tn5 insertions`)
+# a <- tmp[[1]] %>% group_by(prokkaID) %>% summarize(uniqueInsertions = sum(uniqueInsertions), `Total Tn5 insertions` = sum(`Total Tn5 insertions_afonso_liquid`, na.rm = T))
+# cor(a$totalInsertions, a$`Total Tn5 insertions`)
+# 
+# tmp[[2]] <- left_join(tmp[[2]], afonso_agar %>% select(`Total Tn5 insertions`, `Essentiality p-value`, `Gene ID`, Essentiality), by = c("prokkaID" = "Gene ID"))
+# tmp[[2]] <- left_join(tmp[[2]], afonso_liquid %>% select(`Total Tn5 insertions`, `Essentiality p-value`, `Gene ID`, Essentiality), by = c("prokkaID" = "Gene ID"), 
+#                       suffix = c("_afonso_agar", "_afonso_liquid"))
+# a <- tmp[[2]] %>% group_by(prokkaID) %>% summarize(totalInsertions = sum(totalInsertions), `Total Tn5 insertions` = sum(`Total Tn5 insertions_afonso_agar`, na.rm = T))
+# cor(a$totalInsertions, a$`Total Tn5 insertions`)
+# a <- tmp[[2]] %>% group_by(prokkaID) %>% summarize(totalInsertions = sum(totalInsertions), `Total Tn5 insertions` = sum(`Total Tn5 insertions_afonso_liquid`, na.rm = T))
+# cor(a$totalInsertions, a$`Total Tn5 insertions`)
+# 
+# 
+# # Generate Figure 2A/B/C from 
+# # https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5099075/
+# 
+# # A
+# tmp <- map(results, function(x) x[[2]] %>% select(prokkaID, numberInsertionsByTASites, meanNumberInsertionsOverTAs, isEssential))
+# tmp[[1]]$type <- "our_agar"
+# tmp[[2]]$type <- "our_liquid"
+# tmp <- full_join(tmp[[1]] %>% select(prokkaID, meanNumberInsertionsOverTAs, type), tmp[[2]] %>% select(prokkaID, meanNumberInsertionsOverTAs, type))
+# tmp <- tmp %>% pivot_wider(id_cols = prokkaID, names_from = type, values_from = meanNumberInsertionsOverTAs)
+# 
+# A <- ggplot(tmp, aes(x = log10(our_agar + 1), y = log10(our_liquid + 1))) + geom_point()
+# 
+# # B
+# tmp <- map(results, function(x) x[[2]] %>% select(prokkaID, numberInsertionsByTASites, totalInsertions, isEssential))
+# tmp[[1]]$type <- "our_agar"
+# tmp[[2]]$type <- "our_liquid"
+# tmp <- full_join(tmp[[1]] %>% select(prokkaID, numberInsertionsByTASites, type), tmp[[2]] %>% select(prokkaID, numberInsertionsByTASites, type))
+# #tmp <- tmp %>% pivot_wider(id_cols = prokkaID, names_from = type, values_from = totalInsertions)
+# 
+# B <- ggplot(tmp, aes(x = numberInsertionsByTASites, fill = type)) + geom_histogram(alpha = 0.3, position = 'identity', bins = 200)
+# B <- B + xlab("Mean number of\ninsertion events per ORF")
+# B1 <- ggplot(tmp, aes(x = numberInsertionsByTASites, fill = type)) + geom_histogram(alpha = 0.3, position = 'identity', bins = 50) + xlim(c(0, 100))
+# B1 <- B1 + xlab("Mean number of\ninsertion events per ORF")
+# 
+# # C (might be a bit more complicated)
+# tmp <- map(results, function(x) x[[1]])
+# # This seems to run for quite a bit.
+# tmp <- map(tmp, function(x) {
+#   x$Position <-  factor(x$Position, levels = x$Position)
+#   return(x)
+# })
+# tmp <- map(tmp, function(x) {
+#   x$numberInsertionsRel <- x$numberInsertions/sum(x$numberInsertions)
+#   return(x)
+# })
+# do_rarefy <- function(df, depthToRarefy) {
+#   print(sum(df$numberInsertionsRel))
+#   stopifnot(near(sum(df$numberInsertionsRel), 1))
+#   tmp <- sample(x = df$Position, size = depthToRarefy, replace = T, prob = df$numberInsertionsRel)
+#   return(length(unique(tmp)))
+# }
+# 
+# # Have finer curve at start...
+# rarefy <- data.frame(subsample_depth = c(seq(from = 100 , to = 0.25 * sum(tmp[[1]]$numberInsertions), length.out = 50),
+#                                          seq(from = 0.25 * sum(tmp[[1]]$numberInsertions), to = 0.5 * sum(tmp[[1]]$numberInsertions), length.out = 7)))
+# rarefy$subsample_depth <- round(rarefy$subsample_depth)
+# rarefy$subsample_depth_percentage_of_all_insertion_events <- (rarefy$subsample_depth/sum(tmp[[1]]$numberInsertions)) * 100
+# rarefy$type <- "our_agar"
+# tmpp <- data.frame(subsample_depth = c(seq(from = 100, to = 0.25 * sum(tmp[[1]]$numberInsertions), length.out = 50),
+#                                        seq(from = 0.25 * sum(tmp[[2]]$numberInsertions), to = 0.5 * sum(tmp[[2]]$numberInsertions), length.out = 7)))
+# tmpp$subsample_depth <- round(tmpp$subsample_depth)
+# tmpp$subsample_depth_percentage_of_all_insertion_events <- (tmpp$subsample_depth/sum(tmp[[2]]$numberInsertions)) * 100
+# tmpp$type <- "our_liquid"
+# rarefy <- rbind(rarefy, tmpp)
+# names(tmp) <- c("our_agar", "our_liquid")
+# 
+# rarefy <- rarefy %>% mutate(uniqueInsertionSites = map2_dbl(subsample_depth, type, function(x, y) do_rarefy(df = tmp[[y]], x)))
+# 
+# C <- ggplot(rarefy, aes(x = subsample_depth_percentage_of_all_insertion_events, y = uniqueInsertionSites, color = type, group = type)) + geom_line()
+# 
+# C1 <- ggplot(rarefy, aes(x = subsample_depth, y = uniqueInsertionSites, color = type, group = type)) + geom_line()
+# 
+# A <- A + theme_embl()
+# B <- B + theme_embl()
+# B1 <- B1 + theme_embl()
+# C <- C + theme_embl()
+# C1 <- C1 + theme_embl()
+# 
+# p <- A + (B/B1) + C + C1 + plot_layout(ncol = 4)
+# ggsave(filename = "/home/nicolai/for_carlos_4/Fig2abc.pdf", plot = p, width = 15, height = 2.9)
 
