@@ -46,3 +46,6 @@ source deactivate
 # Get read length directly (parsing in R is quite painfully slow...)
 paste <(cat ../results/out/${experimentName}/insertionInfoRaw_${sampleID}_${usedStrain}.tab) <(cat ../results/out/${experimentName}/insertionInfoRaw_${sampleID}_${usedStrain}.tab | cut -f5 | sed "s/M$//") > ${sampleID}_${usedStrain}.tmp; mv ${sampleID}_${usedStrain}.tmp ../results/out/${experimentName}/insertionInfoRaw_${sampleID}_${usedStrain}.tab
 done
+
+# Generate plots
+Rscript analyse_and_visualize.r
