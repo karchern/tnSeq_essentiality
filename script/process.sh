@@ -12,6 +12,9 @@ sampleID=$(echo $e | sed "s/_${usedStrain}//")
 echo $usedStrain
 echo $sampleID
 
+# Transform genome into long format
+cat ../data/genomes/${usedStrain}.fna | grep -v "^>" |  tr -d "\n" | sed "s/./\0\n/g" > ../data/genomes_long_format/${usedStrain}_long.txt
+
 # run prokka
 #source activate prokka
 #mkdir -p ../results/prokka; prokka --outdir ../data/prokka/ --force --prefix ${usedStrain}  --cpus 8 ../data/genomes/${usedStrain}.fna
