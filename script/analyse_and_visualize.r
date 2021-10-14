@@ -121,7 +121,12 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   
   readInsertionWithBarcodes <- readInsertion
   
-  barcodesOverGenome <- readInsertion %>% filter(!is.na(barcode)) %>% group_by(barcode) %>% count(InsertionPosition) %>% arrange(desc(n)) %>% nest() %>% mutate(goodBarcode = map(data, function(x){
+  barcodesOverGenome <- readInsertion %>% 
+    filter(!is.na(barcode)) %>% 
+    group_by(barcode) %>% 
+    count(InsertionPosition) %>% 
+    arrange(desc(n)) %>% nest() %>% 
+    mutate(goodBarcode = map(data, function(x){
     # Count InsertionPositions and sort so that the most dominant position is in row 1, second-most dominantn in row 2 and so forth.
     modeInsertionPosition <- x$InsertionPosition[1]
     InsertionsInmostDominantPosition <- x$n[1]
@@ -132,7 +137,10 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
     } else {
       fractionInsertionsInsecondDominantPosition <- x$n[2]/sum(x$n)
     }
-    
+    # assign a barcode as 'good' if
+    ## It has at least 10 insertions at dominant position
+    ## At least 75% of its insertions are at the first-dominant position
+    ## Not more than 1/8 of its insertions are at the second-dominant position
     if (InsertionsInmostDominantPosition > 10 && fractionInsertionsInmostDominantPosition > (3/4) && (is.na(fractionInsertionsInsecondDominantPosition) || fractionInsertionsInsecondDominantPosition < (1/8))){
       return(list(TRUE, x$InsertionPosition[1], InsertionsInmostDominantPosition, fractionInsertionsInmostDominantPosition, fractionInsertionsInsecondDominantPosition))
     } else {
@@ -145,6 +153,34 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
     mutate(fractionInsertionsInsecondDominantPosition = map_dbl(goodBarcode, function(x) x[[5]])) %>%
     mutate(goodBarcode = map_lgl(goodBarcode, function(x) x[[1]]))
   
+  # KEEP ONLY GOOD BARCODES
+  barcodesOverGenome <- barcodesOverGenome %>% 
+    filter(goodBarcode)
+  
+  bcSimilarityMatrix <- matrix(NA, 
+                               nrow = length(barcodesOverGenome$barcode),
+                               ncol = length(barcodesOverGenome$barcode))
+  # Generate pairwise (mode) barcode similarity matrix
+  stopifnot(length(barcodesOverGenome$barcode) == length(unique(barcodesOverGenome$barcode)))
+  bcsAsCharVectors <- str_split(barcodesOverGenome$barcode, "")
+  stopifnot(all(map_dbl(bcsAsCharVectors, length) == 25))
+  i <- 1
+  ii <- 1
+  print("Generating pairwise barcode similarity matrices")
+  for (bc1 in seq_along(barcodesOverGenome$barcode)) {
+    if(i %% 100 == 0){
+      print(str_c("We are done around ", round(i/length(barcodesOverGenome$barcode), 3) * 100, "%"))
+    }
+    for (bc2 in seq_along(barcodesOverGenome$barcode)) {
+      bcSimilarityMatrix[bc1, bc2] <- sum(bcsAsCharVectors[[bc1]] != bcsAsCharVectors[[bc2]])
+    }
+    i <- i + 1
+  }
+  rownames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
+  colnames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
+  
+  # Understand how many colisions there are
+  apply(bcSimilarityMatrix, 1, function(x) sum(x <=2))
   
   # Group by insertionPosition and get the number of (perfectly matching) reads that inserted here.
   # Also, compute the mode barcode and the barcode purity at that position.
