@@ -373,7 +373,7 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   
   # Get QC plots
   if (!dir.exists(str_c("../plots/", experimentName, "/"))){
-    dir.create(str_c("../plots/", experimentName, "/"))
+    dir.create(str_c("../plots/", experimentName, "/"), recursive = TRUE)
   }
   if (sample == "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample3_B_vulgatus_atcc_8482"){
     expectedNumberOfInsertions <- 96
