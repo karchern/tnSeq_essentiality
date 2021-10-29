@@ -13,11 +13,13 @@ if (rstudioapi::isAvailable()) {
 setwd(wdir)
 plotWindows <- FALSE
 
+#PARAMETER SETTING
+###########################################################################################################
 #Set parameters for each experiment
-experimentName <- "CV001N" #name of the folder where raw data is placed
+experimentName <- "CV001L3S2" #name of the folder where raw data is placed
 #usedStrain <- "atcc_8492_concatenated"
 readLength <- 150 #read length according to which Illumina platform was ran
-expectedNumberOfInsertions <- 190 #when known, fill in the number of mutant strains analyzed 
+#expectedNumberOfInsertions <- 190 #when known, fill in the number of mutant strains analyzed 
 
 ############################################################################################################
 ### ATTENTION: Set this manually !!! ###
@@ -28,14 +30,25 @@ expectedNumberOfInsertions <- 190 #when known, fill in the number of mutant stra
 #TODO Cleanly handle overlapping ORFs
 #TODO Care about strandedness of insertion
 
-#here starts the script that runs all the way to the end. 
-for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c("../data/experiments/", experimentName, "/raw")))) {
+#####This is an automated script that loads in several data files, map transposon insertions across the genome, 
+#annotates genes of the studied organism and produces quality control plots.
+#If the script is to be run manually (line by line) set the sample name manually using the file name in the /data/experiments/"experimentName"/raw folder like this:
+sample <- "HMW5KAFX2_CV001L3_21s001573-1-1_Voogdt_lane1Sample2_sequence_B_uniformis_atcc_8492"
+
+#If the script is to be run automatically start here and run until the end. The FOR loop is used to run the entire script on all sample files in the raw data folder 
+#of the appointed experiment (experimentName)
+for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c("../data/experiments/", experimentName, "/raw")))) { #this line lists all samples in the raw folder and removes the .fastq
+  #depthinfo is just a list of the length of the genome with the read coverage at each position capped at 1000 reads per site (!!)(See process.bash script)
   depthInfo <- read_tsv(str_c("../results/out/", experimentName, "/depth_", sample, ".tab"), col_names = F)
   depthInfo$X1 <- NULL
   colnames(depthInfo) <- c("Position", "coverage")
   
-  usedStrain <- str_c(tail(str_split(sample, pattern = "_")[[1]], 4), collapse = "_")
+  #to get the right genome and other files belonging to a certain sample we need to specify which strain we used
+  usedStrain <- str_c(tail(str_split(sample, pattern = "_")[[1]], 4), collapse = "_") #this line extracts the strain name which should be at the end of the file name, separated by _
   #sample <- str_replace(string = sample, pattern = usedStrain)
+  
+  #TODO ask how the process runs when an experiment has multiple samples (from more than one strain) (e.g. CV001N). There now is no code to 
+  #extract the sample number and separate the generated plots into folders with the sample name. It would be nice to have it like ../CV001N/Sample1/data/raw...
   
   # Join genome nucleotides
   # if (sample == "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample2" || sample == "000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample3"){
@@ -44,45 +57,83 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   # } else {
   #   nucs <- read_tsv("../data/genomes_long_format/B_uniformis_genome_long_format.txt", col_names = F)
   # }
-  nucs <- read_tsv(str_c("../data/genomes_long_format/", usedStrain, "_long.txt"), col_names = F)
   
+  #Load in the nucleotide sequence of the genome of the used strain
+  nucs <- read_tsv(str_c("../data/genomes_long_format/", usedStrain, "_long.txt"), col_names = F)
+  #Create a position variable in nucs by using the dimensions of the nucs file
   nucs <- nucs %>% rename(nucleotide = X1) %>% mutate(Position = 1:dim(nucs)[1])
   nucs$nucleotide <- map_chr(nucs$nucleotide, str_to_upper)
+  #Join the nucleotide sequence of nucs with the coverage in depthinfo based on position
+  
+  #TODO how can we know that the joining of nucs and depthinfo is at the right position? Depthinfo was just a list of numbers and nucs just a list of letters. 
+  #Check how depth file is created in bash script! How is the mapping of reads using Bowtie2 done? What genome format does it use? It has to be done with the same input file right?
   depthInfo <- left_join(depthInfo, nucs, by = 'Position')
+  #Identify all the TA sites in the depthinfo table
   TA <- map2_lgl(depthInfo$nucleotide[1:(length(depthInfo$nucleotide) - 1)], 
                  depthInfo$nucleotide[2:(length(depthInfo$nucleotide))], function(x, y) ifelse(x == "T" && y == "A", TRUE, FALSE))
   depthInfo$TA <- c(TA, T)
   
-  # Join insertion info file (basically parsed samtools view containing SAM flag, position, CIGAR flag, and sequence) and parse it further:
+  # Join insertion info file (basically parsed samtools view containing SAM flag, position, CIGAR flag, and sequence) and parse it further. The insertionInfoRaw file generated 
+  #in process.bash contains the important SAM tool variables at the genome positions
   readInsertion <- read_tsv(str_c("../results/out/", experimentName, "/insertionInfoRaw_", sample, ".tab"), col_names = F)
-  # Keep only reads that MATCH PERFECTLY (using CIGAR flag).
   
-  ########################################################################
-  ### ATTENTION: This NEEDS to be changed if your read length changes!!!  #
-  #########################################################################
+  # Keep only reads that MATCH PERFECTLY (using CIGAR flag). The CIGAR string in the samtools file (insertionInfoRaw.tab) has different meanings (see here https://samtools.github.io/hts-specs/SAMv1.pdf)
+  #E.g."M" stands for alignment match while "I" stands for insertion to the reference. So M60 means 60 nucleotides of the read map to the reference genome. While 37M1D24M means
+  #the first 37 map then there is 1 deletion and the 24 map again.
+  ####EXPLANATION####
+  #to keep only reads that map perfectly we use the read length that we got from the specific sequencing run (set as parameter above). Due to the nature of the PCR we use to amplify
+  #the transposon-genome junction, the first 99 bp in any read from Illumina are transposon and thus removed from the read in the process.sh script. This means if we run 
+  #150 bp Illumina run, the read length left over after removing transposon is max 60 bp (or more depending on how good the run went). If all match perfectly the CIGAR flag is 60M so 3 characters. If we do 250 bp illumina run
+  #we have 250 - 99 = 161 bp left to map and if all are correct we get 4 characters. We use the 3 or 4 character trait for 150 or 250 bp sequencing resp. to capture CIGAR flags that 
+  #show perfect matching (so only M).
   readInsertion <- readInsertion[str_ends(string = readInsertion$X5, pattern = "M") & str_length(readInsertion$X5) == ifelse((readLength - 100) < 100, 3, 4), ]
+  #TODO reads with "I" in CIGAR flag are now removed but we map against the B. uniformis reference genome. If there are any SNP's occuring in our strain that are not present in reference
+  #we remove reads that may be informative for our b. uniformis (but likely there will be few mismatches of our strain to the reference)
   
   # Rename columns
   colnames(readInsertion) <- c("readName", "SAM", "Position", "MAPQ", "CIGAR", "read", "readLength")
   readInsertion$readLength <- as.numeric(readInsertion$readLength)
+  
+  #Check how many reads are not mapping with maximum MAPQ score. The highest MAPQ score (42) indicates the highest uniqueness of the read. Lower scores mean that that read was also
+  #mapped to another site
+  reads_per_MAPQ <- readInsertion %>% group_by(MAPQ) %>% count()
+  ggplot(data = reads_per_MAPQ, aes(x = MAPQ, y = n)) + 
+    geom_line() +
+    ggtitle("Quantification of read uniqueness") + xlab("MAPQ score") + ylab("Reads")
+  
   # Filter reads based on MAPQ score
   readInsertion <- readInsertion %>% filter(MAPQ == 42)
+  readInsertion_42 <- readInsertion %>% filter(MAPQ == 42)
   
-  # Read barcode mapping file and left join it to readInsertion
+  
+  # Read barcode mapping file and left join it to readInsertion. Here we append the barcodes (from the readname_barcode.tab file, see process.sh) to the readInsertion 
+  #info table and we link them via their shared "readname" info (the unique read identifiers given by Illumina software)
   # reads_and_their_barcodes <- read_tsv(str_c("results/CV001I10_all_forward_reads_concatenated_140000_reads_per_sample_readname_barcode.tab"), col_names = F)
   reads_and_their_barcodes <- read_tsv(str_c("../results/out/", experimentName, "/readname_barcode_", sample, ".tab"), col_names = F)
   colnames(reads_and_their_barcodes) <- c("readName", "barcode")
   #n <- dim(readInsertion)[1]
+  #append the barcodes to the readInsertion table
   readInsertion <- left_join(readInsertion, reads_and_their_barcodes, by = 'readName')
   #stopifnot(dim(readInsertion)[1] == n)
   
   # IMPORTANT: Here I remove all reads where barcode == NA
-  # I'm not checking for barcode integrity when I filter reads but this file (_sequence_readname_barcode) does have a check for barcode integrity.
+  # I'm not checking for barcode integrity when I filter reads but barcode source file (_sequence_readname_barcode) does have a check for barcode integrity.
   # Thus, we expect to lose some reads here..
   # This can happen when the IR/bridging site could not be identified (probably rare) OR when at least one pjhred score over the barcode was < 30.
   readInsertion <- readInsertion %>% filter(!is.na(barcode))
+
+  #####EXPLANATION#####
+  #Initially, the readInsertion and reads_and_their_barcodes tables have the same number of reads (lines) The readInsertion table is cleaned up by removing non-perfect matching
+  #reads (using CIGAR flag) which decreases the number of kept reads (lines). E.g. in CV001B5_pooled we start with 11.500.000 reads in both tables, after filtering out non-matches
+  #we have 8.330.000 reads in readInsertion. We then append the reads_and_their_barcodes table to readInsertion and remove all reads that do not have a barcode (NA). For the
+  #CV001B5_pooled example this means we go down to 5.700.000 reads. However, if you remove reads that do not have a barcode in the reads_and_their_barcode table you have
+  #7.600.000 reads left. This discrepancy is thus of course due to the extra filtering step in readInsertion for the perfect matching reads
   
-  # The position of reverse-mapped reads (SAM flag == 16) needs to be parsed to get the insertion position. See  some lines below, the following command
+  # The position of reverse-mapped reads (SAM flag == 16) needs to be parsed to get the correct insertion position on the single lined genome. For this we use the readlength
+  #and add this to the position and remove 2 for the TA. (The start of a reverse read is the end of a forward read minus the start location TA). 
+  #TODO does this method hold for those rare cases that transposons do not insert in a TA site?
+  #TODO Is this method actually correct? Each read, whether mapped by bowtie2 to the forward or reverse strand will start at a TA. If the reads is mapped onto the reverse
+  #strand, its insertion position is still the same only at AT on the forward strand right???? (probably correct since the reads with flag 16 in readInsertion are in opposite direction)
   # readInsertion %>% filter(InsertionPosition == 231)
   readInsertion$InsertionPosition <- pmap_dbl(list(readInsertion$SAM, readInsertion$Position, readInsertion$readLength), function(x, y, z){
     if (x == 16){
@@ -97,12 +148,19 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   #readInsertion %>% filter(InsertionPosition == 231)
   
   # Remove read info, don't need it anymore
-  readInsertion$read <- NULL
+  #readInsertion$read <- NULL
+  
+  
+  ##############################################################
+  ### At this stage we have linked barcodes to insertion sites (positions) and cleaned the table (readInsertion) up to have only reads that map perfectly and that have a barcode 
+  ##############################################################
   
   # This function returns the mode/'purity' of barcodes over a given position.
   # Importantly, it does not include reads that did not have a barcode!
   # That means that if we have barcodes in a group like so: c("A", "A", "B", NA, NA),
   # We'd get back A and 0.66 for purity sa opposed to 0.4 for purity!!!
+  #The mode/purity of a barcode over a position indicates for a given position, how many barcode are linked to it. 
+  #TODO need explanation: how does this Mode function work? what is x? 
   Mode <- function(x, returnPurity = F) {
     #print(x)
     if (any(is.na(x))){
@@ -122,7 +180,7 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   }
   
   # Important: at this point, I have joined readInsertion file with their barcodes. 
-  # Thus, here we have the barcode information of all well-mapping mapping reads.
+  # Thus, here we have the barcode information of all well-mapping reads.
   # We can now also compute the distribution of barcode maps over the entire genome. 
   # So after this, we'll have two complementary tables that will give us information:
   ### 1. The mode/purity of barcodes over insertion sites (computed below)
@@ -133,118 +191,64 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   
   readInsertionWithBarcodes <- readInsertion
   
-  barcodesOverGenome <- readInsertion %>% 
-    filter(!is.na(barcode)) %>% 
-    group_by(barcode) %>% 
-    count(InsertionPosition) %>% 
-    arrange(desc(n)) %>% nest() %>% 
-    mutate(goodBarcode = map(data, function(x){
-    # Count InsertionPositions and sort so that the most dominant position is in row 1, second-most dominantn in row 2 and so forth.
+  #Here a new table is created where each line is a barcode. The quality of the barcode is scored based on rules by Wetmore et al 2015
+  # and by using nest() each barcode gets an inner table that will show at what position that barcode has X number of reads
+  # The nested table shows for each barcode how many reads map at what position. The vast majority of barcodes
+  #have >99% of their reads at one position and a few reads at just one other position
+  barcodesOverGenome <- readInsertion %>% filter(!is.na(barcode)) %>% group_by(barcode) %>% count(InsertionPosition) %>% arrange(desc(n)) %>% nest() %>% mutate(goodBarcode = map(data, function(x){
+    # Count InsertionPositions and sort so that the most dominant position is in row 1, second-most dominant in row 2 and so forth.
     modeInsertionPosition <- x$InsertionPosition[1]
     InsertionsInmostDominantPosition <- x$n[1]
     fractionInsertionsInmostDominantPosition <- x$n[1]/sum(x$n)
-    if (dim(x)[1] == 1){
-      # Only a single insertion site was hit. 
+    if (dim(x)[1] == 1){ #means that the barcode was not found at any other site so is pure
+      # The barcode links only to one genomic site / insertion position
       fractionInsertionsInsecondDominantPosition <- NA
     } else {
-      fractionInsertionsInsecondDominantPosition <- x$n[2]/sum(x$n)
+      fractionInsertionsInsecondDominantPosition <- x$n[2]/sum(x$n) # if x is more than 1, there is another site for that barcode and thus not pure
     }
-    # barcode rules
-    # assign a barcode as 'good' if
-    ## It has at least 10 insertions at dominant position
-    ## At least 75% of its insertions are at the first-dominant position
-    ## Not more than 1/8 of its insertions are at the second-dominant position
+    # barcode rules according to Wetmore et al. 2015 (i.e. each barcode seen at least 10 times, and 75% of barcode on primary position and not more than 1/8 of that barcode on secondary position)
     if (InsertionsInmostDominantPosition > 10 && fractionInsertionsInmostDominantPosition > (3/4) && (is.na(fractionInsertionsInsecondDominantPosition) || fractionInsertionsInsecondDominantPosition < (1/8))){
       return(list(TRUE, x$InsertionPosition[1], InsertionsInmostDominantPosition, fractionInsertionsInmostDominantPosition, fractionInsertionsInsecondDominantPosition))
     } else {
-      return(list(FALSE, x$InsertionPosition[1], InsertionsInmostDominantPosition, fractionInsertionsInmostDominantPosition, fractionInsertionsInsecondDominantPosition))
+      return(list(FALSE, NA, InsertionsInmostDominantPosition, fractionInsertionsInmostDominantPosition, fractionInsertionsInsecondDominantPosition))
     }
   })) %>% 
     mutate(InsertionPosition = map_dbl(goodBarcode, function(x) x[[2]])) %>% 
     mutate(InsertionsInmostDominantPosition = map_dbl(goodBarcode, function(x) x[[3]])) %>%
     mutate(fractionInsertionsInmostDominantPosition = map_dbl(goodBarcode, function(x) x[[4]])) %>%
     mutate(fractionInsertionsInsecondDominantPosition = map_dbl(goodBarcode, function(x) x[[5]])) %>%
-    mutate(goodBarcode = map_lgl(goodBarcode, function(x) x[[1]]))
+    mutate(goodBarcode = map_lgl(goodBarcode, function(x) x[[1]])) #these mutate functions generate the different columns in the nested barcodesOverGenome table
   
-  # KEEP ONLY GOOD BARCODES
-  barcodesOverGenome <- barcodesOverGenome %>% 
-    filter(goodBarcode)
+  # TODO need explanation: for CV001B5_pooled when we sort barcodesOverGenome by InsertionsInMostDominantPosition the top barcode shows 225251 reads at position 2711836. If we open
+  #the nested table we see the same number at the same position and also much lower read numbers at 195 different positions (e.g. 56 reads at position 1082201). However, if we now
+  #sort barcodesOverGenome based on InsertionPosition and look for position 2711836 and then open the nested table we get a very different nested table with just two positions
+  # and very few reads at both positions. So what does this nested table actually do / contain? There should be no difference in this when you sort on position or most abundant insertion
+  #the inner table seem fixed and does not change upon sorting
+  #Also, when we take barcode CACCATGACCTGTTCCATCCTTGAA that has many reads at position 2711836 and we do readInsertion %>% filter(barcode == "CACCATGACCTGTTCCATCCTTGAA")
+  #this shows there are three reads with this barcode at position 29062, however if we filter the barcodesOverGenome table for insertionPosition 29062 then there are just 
+  #two barcodes but neither are barcode CACCATGACCTGTTCCATCCTTGAA that we got from the readInsertion table. Has this to do with the mode of barcodes being reported? So in 
+  #barcodesOverGenome only barcodes and their position are reported if the are the mode of that barcode at that position? CACCATGACCTGTTCCATCCTTGAA is not the mode for position
+  # 29062
+  #I have no idea what'z goin on
   
-  # Sort barcodes by number of insertions. This way, we will later mostly remove lowly abundant barcodes due to seq. errors.
-  barcodesOverGenome <- barcodesOverGenome %>%
-    arrange(desc(InsertionsInmostDominantPosition))
-  
-  bcSimilarityMatrix <- matrix(NA, 
-                               nrow = length(barcodesOverGenome$barcode),
-                               ncol = length(barcodesOverGenome$barcode))
-  # Generate pairwise (mode) barcode similarity matrix
-  stopifnot(length(barcodesOverGenome$barcode) == length(unique(barcodesOverGenome$barcode)))
-  bcsAsCharVectors <- str_split(barcodesOverGenome$barcode, "")
-  stopifnot(all(map_dbl(bcsAsCharVectors, length) == 25))
-  i <- 1
-  ii <- 1
-  print("Generating pairwise barcode similarity matrices")
-  for (bc1 in seq_along(barcodesOverGenome$barcode)) {
-    if(i %% 100 == 0){
-      print(str_c("We are done around ", round(i/length(barcodesOverGenome$barcode), 3) * 100, "%"))
-    }
-    for (bc2 in seq_along(barcodesOverGenome$barcode)) {
-      bcSimilarityMatrix[bc1, bc2] <- sum(bcsAsCharVectors[[bc1]] != bcsAsCharVectors[[bc2]])
-    }
-    i <- i + 1
-  }
-  rownames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
-  colnames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
-  
-  # Check this out to see that the '10 reads' threshold isn't very good necessarily since it's dependent on seq depth too.
-  barcodesOverGenome[c(1, which(bcSimilarityMatrix[ 1,] == 1)), ]
-  
-  # Now start the barcode cleanup: 
-  ## Loop over barcodes (starting with the most abundant one), each time checking for collisions and removing coliding ones
-  print ("Starting barcode position mapping")
-  i <- 1
-  while (TRUE){
-    #print(i)
-    #currentBarcode <- barcodesOverGenome$barcode
-    indexCollisions <- which(bcSimilarityMatrix[i, ] <= 2) 
-    numCollisions <- length(indexCollisions)
-    # Every barcode will collide with itself. Hence > 1.
-    if (numCollisions > 1){
-      print(str_c("Current barcode has ", numCollisions - 1, " collisions. Removing them."))
-      l <- length(indexCollisions)
-      indexCollisions <- indexCollisions[-which(indexCollisions == i)]
-      stopifnot((l - 1) == length(indexCollisions))
-      barcodesOverGenome <- barcodesOverGenome[-indexCollisions, ]
-      bcSimilarityMatrix <- bcSimilarityMatrix[-indexCollisions, -indexCollisions]
-    }
-    if (i >= dim(barcodesOverGenome)[1]){
-      break
-    }
-    i <- i + 1
-    # Some sanity checks...
-    stopifnot(dim(barcodesOverGenome)[1] == dim(bcSimilarityMatrix))
-  }
-  
-  # After this process, no barcodes should be similar anymore...
-  tmp <- bcSimilarityMatrix
-  diag(tmp) <- 100
-  stopifnot(!any(tmp <= 2))
-  
-  # I've tested this with sample 000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample1_B_uniformis_atcc_8492
-  # And with the current settings, there are still some hickups mainly relating to the 10 read hard cutoff to define good barcodes:
-  # We still find Barcodes that are not similar (according to our rules of <= 2 mismatches), but those are clearly sequencing errors we don't catch. See below for a few examples
-  barcodesOverGenome %>% group_by(InsertionPosition) %>% tally() %>% arrange(desc(n)) %>% head() %>% print()
-  barcodesOverGenome %>% filter(InsertionPosition == 4456354)
-  barcodesOverGenome %>% filter(InsertionPosition == 2364403)
-  
-  ### End of barcode position mapping!
-  
-  # Group by insertionPosition and get the number of (perfectly matching) reads that inserted here.
-  # Also, compute the mode barcode and the barcode purity at that position.
+  # Here we simplify the readInsertion table by adding the barcode information but removing the read info and SAM flags
+  # Take readInsertion table, group by insertionPosition and get the number of (perfectly matching) reads that inserted here.
+  # Also, compute the mode barcode and the barcode purity at each position.
   readInsertion <- readInsertion %>% group_by(InsertionPosition) %>% summarize(numberInsertions = length(readLength),
                                                                                modeBarCode = Mode(barcode, returnPurity = FALSE),
                                                                                barCodeModePurity = Mode(barcode, returnPurity = TRUE))
+  
+  #####################################################################################################################################
+  ###### At this stage we will join the info on barcodes and their insertion positions with the genome position from depth info to get the barcodes all along the genome
+  #####################################################################################################################################
+  
+  #Now append the readInsertion table to the depthInfo table with genome info by position and insertion position
   depthInfo <- left_join(depthInfo, readInsertion, by = c('Position' = "InsertionPosition"))
+  
+  #To check: the readInsertion table now tells that the Mode barcode of CACCATGACCTGTTCCATCCTTGAA (so this is the most common barcode of all sequences that look very similar to CACCATGACCTGTTCCATCCTTGAA)
+  #had very few reads in three non-TA sites and 233127 reads at position 2711836. Since this is the Mode of the barcode it is not the same as in the barcodesOvergenome table
+  # where this barcode has 225251 reads at position 2711836. If we now multiply the reads of the modeBarCode from readInsertion by its purity (233127 reads * 0.992158 purity)
+  #we get the 225251 number for the non-mode version of this barcode in barcodesOverGenome
   
   # since we left-join on the depthInfo, we have to replace NAs with 0s (readInsertion table will have no entries where not a single read maps)
   depthInfo$numberInsertions <- map_dbl(depthInfo$numberInsertions, function(x) ifelse(is.na(x), 0, x))
