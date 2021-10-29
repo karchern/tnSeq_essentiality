@@ -144,7 +144,7 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
     if (InsertionsInmostDominantPosition > 10 && fractionInsertionsInmostDominantPosition > (3/4) && (is.na(fractionInsertionsInsecondDominantPosition) || fractionInsertionsInsecondDominantPosition < (1/8))){
       return(list(TRUE, x$InsertionPosition[1], InsertionsInmostDominantPosition, fractionInsertionsInmostDominantPosition, fractionInsertionsInsecondDominantPosition))
     } else {
-      return(list(FALSE, NA, InsertionsInmostDominantPosition, fractionInsertionsInmostDominantPosition, fractionInsertionsInsecondDominantPosition))
+      return(list(FALSE, x$InsertionPosition[1], InsertionsInmostDominantPosition, fractionInsertionsInmostDominantPosition, fractionInsertionsInsecondDominantPosition))
     }
   })) %>% 
     mutate(InsertionPosition = map_dbl(goodBarcode, function(x) x[[2]])) %>% 
@@ -183,7 +183,7 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   rownames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
   colnames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
   
-  # Check this out to see that the '10 reads' threshold isn't very good since it's dependent on seq depth too.
+  # Check this out to see that the '10 reads' threshold isn't very good necessarily since it's dependent on seq depth too.
   barcodesOverGenome[c(1, which(bcSimilarityMatrix[ 1,] == 1)), ]
   
   # Now start the barcode cleanup: 
@@ -192,7 +192,7 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   i <- 1
   while (TRUE){
     #print(i)
-    currentBarcode <- barcodesOverGenome$barcode
+    #currentBarcode <- barcodesOverGenome$barcode
     indexCollisions <- which(bcSimilarityMatrix[i, ] <= 2) 
     numCollisions <- length(indexCollisions)
     # Every barcode will collide with itself. Hence > 1.
