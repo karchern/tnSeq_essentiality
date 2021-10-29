@@ -133,7 +133,12 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   
   readInsertionWithBarcodes <- readInsertion
   
-  barcodesOverGenome <- readInsertion %>% filter(!is.na(barcode)) %>% group_by(barcode) %>% count(InsertionPosition) %>% arrange(desc(n)) %>% nest() %>% mutate(goodBarcode = map(data, function(x){
+  barcodesOverGenome <- readInsertion %>% 
+    filter(!is.na(barcode)) %>% 
+    group_by(barcode) %>% 
+    count(InsertionPosition) %>% 
+    arrange(desc(n)) %>% nest() %>% 
+    mutate(goodBarcode = map(data, function(x){
     # Count InsertionPositions and sort so that the most dominant position is in row 1, second-most dominantn in row 2 and so forth.
     modeInsertionPosition <- x$InsertionPosition[1]
     InsertionsInmostDominantPosition <- x$n[1]
@@ -145,6 +150,10 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
       fractionInsertionsInsecondDominantPosition <- x$n[2]/sum(x$n)
     }
     # barcode rules
+    # assign a barcode as 'good' if
+    ## It has at least 10 insertions at dominant position
+    ## At least 75% of its insertions are at the first-dominant position
+    ## Not more than 1/8 of its insertions are at the second-dominant position
     if (InsertionsInmostDominantPosition > 10 && fractionInsertionsInmostDominantPosition > (3/4) && (is.na(fractionInsertionsInsecondDominantPosition) || fractionInsertionsInsecondDominantPosition < (1/8))){
       return(list(TRUE, x$InsertionPosition[1], InsertionsInmostDominantPosition, fractionInsertionsInmostDominantPosition, fractionInsertionsInsecondDominantPosition))
     } else {
@@ -157,6 +166,78 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
     mutate(fractionInsertionsInsecondDominantPosition = map_dbl(goodBarcode, function(x) x[[5]])) %>%
     mutate(goodBarcode = map_lgl(goodBarcode, function(x) x[[1]]))
   
+  # KEEP ONLY GOOD BARCODES
+  barcodesOverGenome <- barcodesOverGenome %>% 
+    filter(goodBarcode)
+  
+  # Sort barcodes by number of insertions. This way, we will later mostly remove lowly abundant barcodes due to seq. errors.
+  barcodesOverGenome <- barcodesOverGenome %>%
+    arrange(desc(InsertionsInmostDominantPosition))
+  
+  bcSimilarityMatrix <- matrix(NA, 
+                               nrow = length(barcodesOverGenome$barcode),
+                               ncol = length(barcodesOverGenome$barcode))
+  # Generate pairwise (mode) barcode similarity matrix
+  stopifnot(length(barcodesOverGenome$barcode) == length(unique(barcodesOverGenome$barcode)))
+  bcsAsCharVectors <- str_split(barcodesOverGenome$barcode, "")
+  stopifnot(all(map_dbl(bcsAsCharVectors, length) == 25))
+  i <- 1
+  ii <- 1
+  print("Generating pairwise barcode similarity matrices")
+  for (bc1 in seq_along(barcodesOverGenome$barcode)) {
+    if(i %% 100 == 0){
+      print(str_c("We are done around ", round(i/length(barcodesOverGenome$barcode), 3) * 100, "%"))
+    }
+    for (bc2 in seq_along(barcodesOverGenome$barcode)) {
+      bcSimilarityMatrix[bc1, bc2] <- sum(bcsAsCharVectors[[bc1]] != bcsAsCharVectors[[bc2]])
+    }
+    i <- i + 1
+  }
+  rownames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
+  colnames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
+  
+  # Check this out to see that the '10 reads' threshold isn't very good since it's dependent on seq depth too.
+  barcodesOverGenome[c(1, which(bcSimilarityMatrix[ 1,] == 1)), ]
+  
+  # Now start the barcode cleanup: 
+  ## Loop over barcodes (starting with the most abundant one), each time checking for collisions and removing coliding ones
+  print ("Starting barcode position mapping")
+  i <- 1
+  while (TRUE){
+    #print(i)
+    currentBarcode <- barcodesOverGenome$barcode
+    indexCollisions <- which(bcSimilarityMatrix[i, ] <= 2) 
+    numCollisions <- length(indexCollisions)
+    # Every barcode will collide with itself. Hence > 1.
+    if (numCollisions > 1){
+      print(str_c("Current barcode has ", numCollisions - 1, " collisions. Removing them."))
+      l <- length(indexCollisions)
+      indexCollisions <- indexCollisions[-which(indexCollisions == i)]
+      stopifnot((l - 1) == length(indexCollisions))
+      barcodesOverGenome <- barcodesOverGenome[-indexCollisions, ]
+      bcSimilarityMatrix <- bcSimilarityMatrix[-indexCollisions, -indexCollisions]
+    }
+    if (i >= dim(barcodesOverGenome)[1]){
+      break
+    }
+    i <- i + 1
+    # Some sanity checks...
+    stopifnot(dim(barcodesOverGenome)[1] == dim(bcSimilarityMatrix))
+  }
+  
+  # After this process, no barcodes should be similar anymore...
+  tmp <- bcSimilarityMatrix
+  diag(tmp) <- 100
+  stopifnot(!any(tmp <= 2))
+  
+  # I've tested this with sample 000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample1_B_uniformis_atcc_8492
+  # And with the current settings, there are still some hickups mainly relating to the 10 read hard cutoff to define good barcodes:
+  # We still find Barcodes that are not similar (according to our rules of <= 2 mismatches), but those are clearly sequencing errors we don't catch. See below for a few examples
+  barcodesOverGenome %>% group_by(InsertionPosition) %>% tally() %>% arrange(desc(n)) %>% head() %>% print()
+  barcodesOverGenome %>% filter(InsertionPosition == 4456354)
+  barcodesOverGenome %>% filter(InsertionPosition == 2364403)
+  
+  ### End of barcode position mapping!
   
   # Group by insertionPosition and get the number of (perfectly matching) reads that inserted here.
   # Also, compute the mode barcode and the barcode purity at that position.
