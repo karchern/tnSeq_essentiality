@@ -14,10 +14,10 @@ setwd(wdir)
 plotWindows <- FALSE
 
 #Set parameters for each experiment
-experimentName <- "CV001N" #name of the folder where raw data is placed
+#experimentName <- "CV001N" #name of the folder where raw data is placed
 #usedStrain <- "atcc_8492_concatenated"
 readLength <- 150 #read length according to which Illumina platform was ran
-expectedNumberOfInsertions <- 190 #when known, fill in the number of mutant strains analyzed 
+#expectedNumberOfInsertions <- 190 #when known, fill in the number of mutant strains analyzed 
 
 ############################################################################################################
 ### ATTENTION: Set this manually !!! ###
@@ -29,7 +29,10 @@ expectedNumberOfInsertions <- 190 #when known, fill in the number of mutant stra
 #TODO Care about strandedness of insertion
 
 #here starts the script that runs all the way to the end. 
-for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c("../data/experiments/", experimentName, "/raw")))) {
+sample <- commandArgs(trailingOnly = T)[1]
+#experimentName <- "CV001N"
+experimentName <- commandArgs(trailingOnly = T)[2]
+#for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c("../data/experiments/", experimentName, "/raw")))) {
   depthInfo <- read_tsv(str_c("../results/out/", experimentName, "/depth_", sample, ".tab"), col_names = F)
   depthInfo$X1 <- NULL
   colnames(depthInfo) <- c("Position", "coverage")
@@ -166,78 +169,84 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
     mutate(fractionInsertionsInsecondDominantPosition = map_dbl(goodBarcode, function(x) x[[5]])) %>%
     mutate(goodBarcode = map_lgl(goodBarcode, function(x) x[[1]]))
   
+  ########################################
+  ### Start of barcode position mapping! ###
+  ########################################
+  
   # KEEP ONLY GOOD BARCODES
-  barcodesOverGenome <- barcodesOverGenome %>% 
-    filter(goodBarcode)
+  # barcodesOverGenome <- barcodesOverGenome %>% 
+  #   filter(goodBarcode)
+  # 
+  # # Sort barcodes by number of insertions. This way, we will later mostly remove lowly abundant barcodes due to seq. errors.
+  # barcodesOverGenome <- barcodesOverGenome %>%
+  #   arrange(desc(InsertionsInmostDominantPosition))
+  # 
+  # bcSimilarityMatrix <- matrix(NA, 
+  #                              nrow = length(barcodesOverGenome$barcode),
+  #                              ncol = length(barcodesOverGenome$barcode))
+  # # Generate pairwise (mode) barcode similarity matrix
+  # stopifnot(length(barcodesOverGenome$barcode) == length(unique(barcodesOverGenome$barcode)))
+  # bcsAsCharVectors <- str_split(barcodesOverGenome$barcode, "")
+  # stopifnot(all(map_dbl(bcsAsCharVectors, length) == 25))
+  # i <- 1
+  # ii <- 1
+  # print("Generating pairwise barcode similarity matrices")
+  # for (bc1 in seq_along(barcodesOverGenome$barcode)) {
+  #   if(i %% 100 == 0){
+  #     print(str_c("We are done around ", round(i/length(barcodesOverGenome$barcode), 3) * 100, "%"))
+  #   }
+  #   for (bc2 in seq_along(barcodesOverGenome$barcode)) {
+  #     bcSimilarityMatrix[bc1, bc2] <- sum(bcsAsCharVectors[[bc1]] != bcsAsCharVectors[[bc2]])
+  #   }
+  #   i <- i + 1
+  # }
+  # rownames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
+  # colnames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
+  # 
+  # # Check this out to see that the '10 reads' threshold isn't very good necessarily since it's dependent on seq depth too.
+  # barcodesOverGenome[c(1, which(bcSimilarityMatrix[ 1,] == 1)), ]
+  # 
+  # # Now start the barcode cleanup: 
+  # ## Loop over barcodes (starting with the most abundant one), each time checking for collisions and removing coliding ones
+  # print ("Starting barcode position mapping")
+  # i <- 1
+  # while (TRUE){
+  #   #print(i)
+  #   #currentBarcode <- barcodesOverGenome$barcode
+  #   indexCollisions <- which(bcSimilarityMatrix[i, ] <= 2) 
+  #   numCollisions <- length(indexCollisions)
+  #   # Every barcode will collide with itself. Hence > 1.
+  #   if (numCollisions > 1){
+  #     print(str_c("Current barcode has ", numCollisions - 1, " collisions. Removing them."))
+  #     l <- length(indexCollisions)
+  #     indexCollisions <- indexCollisions[-which(indexCollisions == i)]
+  #     stopifnot((l - 1) == length(indexCollisions))
+  #     barcodesOverGenome <- barcodesOverGenome[-indexCollisions, ]
+  #     bcSimilarityMatrix <- bcSimilarityMatrix[-indexCollisions, -indexCollisions]
+  #   }
+  #   if (i >= dim(barcodesOverGenome)[1]){
+  #     break
+  #   }
+  #   i <- i + 1
+  #   # Some sanity checks...
+  #   stopifnot(dim(barcodesOverGenome)[1] == dim(bcSimilarityMatrix))
+  # }
+  # 
+  # # After this process, no barcodes should be similar anymore...
+  # tmp <- bcSimilarityMatrix
+  # diag(tmp) <- 100
+  # stopifnot(!any(tmp <= 2))
+  # 
+  # # I've tested this with sample 000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample1_B_uniformis_atcc_8492
+  # # And with the current settings, there are still some hickups mainly relating to the 10 read hard cutoff to define good barcodes:
+  # # We still find Barcodes that are not similar (according to our rules of <= 2 mismatches), but those are clearly sequencing errors we don't catch. See below for a few examples
+  # barcodesOverGenome %>% group_by(InsertionPosition) %>% tally() %>% arrange(desc(n)) %>% head() %>% print()
+  # barcodesOverGenome %>% filter(InsertionPosition == 4456354)
+  # barcodesOverGenome %>% filter(InsertionPosition == 2364403)
   
-  # Sort barcodes by number of insertions. This way, we will later mostly remove lowly abundant barcodes due to seq. errors.
-  barcodesOverGenome <- barcodesOverGenome %>%
-    arrange(desc(InsertionsInmostDominantPosition))
-  
-  bcSimilarityMatrix <- matrix(NA, 
-                               nrow = length(barcodesOverGenome$barcode),
-                               ncol = length(barcodesOverGenome$barcode))
-  # Generate pairwise (mode) barcode similarity matrix
-  stopifnot(length(barcodesOverGenome$barcode) == length(unique(barcodesOverGenome$barcode)))
-  bcsAsCharVectors <- str_split(barcodesOverGenome$barcode, "")
-  stopifnot(all(map_dbl(bcsAsCharVectors, length) == 25))
-  i <- 1
-  ii <- 1
-  print("Generating pairwise barcode similarity matrices")
-  for (bc1 in seq_along(barcodesOverGenome$barcode)) {
-    if(i %% 100 == 0){
-      print(str_c("We are done around ", round(i/length(barcodesOverGenome$barcode), 3) * 100, "%"))
-    }
-    for (bc2 in seq_along(barcodesOverGenome$barcode)) {
-      bcSimilarityMatrix[bc1, bc2] <- sum(bcsAsCharVectors[[bc1]] != bcsAsCharVectors[[bc2]])
-    }
-    i <- i + 1
-  }
-  rownames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
-  colnames(bcSimilarityMatrix) <- barcodesOverGenome$barcode
-  
-  # Check this out to see that the '10 reads' threshold isn't very good necessarily since it's dependent on seq depth too.
-  barcodesOverGenome[c(1, which(bcSimilarityMatrix[ 1,] == 1)), ]
-  
-  # Now start the barcode cleanup: 
-  ## Loop over barcodes (starting with the most abundant one), each time checking for collisions and removing coliding ones
-  print ("Starting barcode position mapping")
-  i <- 1
-  while (TRUE){
-    #print(i)
-    #currentBarcode <- barcodesOverGenome$barcode
-    indexCollisions <- which(bcSimilarityMatrix[i, ] <= 2) 
-    numCollisions <- length(indexCollisions)
-    # Every barcode will collide with itself. Hence > 1.
-    if (numCollisions > 1){
-      print(str_c("Current barcode has ", numCollisions - 1, " collisions. Removing them."))
-      l <- length(indexCollisions)
-      indexCollisions <- indexCollisions[-which(indexCollisions == i)]
-      stopifnot((l - 1) == length(indexCollisions))
-      barcodesOverGenome <- barcodesOverGenome[-indexCollisions, ]
-      bcSimilarityMatrix <- bcSimilarityMatrix[-indexCollisions, -indexCollisions]
-    }
-    if (i >= dim(barcodesOverGenome)[1]){
-      break
-    }
-    i <- i + 1
-    # Some sanity checks...
-    stopifnot(dim(barcodesOverGenome)[1] == dim(bcSimilarityMatrix))
-  }
-  
-  # After this process, no barcodes should be similar anymore...
-  tmp <- bcSimilarityMatrix
-  diag(tmp) <- 100
-  stopifnot(!any(tmp <= 2))
-  
-  # I've tested this with sample 000000000-JLF44_CV001N_21s002101-1-1_Voogdt_lane1Sample1_B_uniformis_atcc_8492
-  # And with the current settings, there are still some hickups mainly relating to the 10 read hard cutoff to define good barcodes:
-  # We still find Barcodes that are not similar (according to our rules of <= 2 mismatches), but those are clearly sequencing errors we don't catch. See below for a few examples
-  barcodesOverGenome %>% group_by(InsertionPosition) %>% tally() %>% arrange(desc(n)) %>% head() %>% print()
-  barcodesOverGenome %>% filter(InsertionPosition == 4456354)
-  barcodesOverGenome %>% filter(InsertionPosition == 2364403)
-  
-  ### End of barcode position mapping!
+  ########################################
+  ### End of barcode position mapping! ###
+  ########################################
   
   # Group by insertionPosition and get the number of (perfectly matching) reads that inserted here.
   # Also, compute the mode barcode and the barcode purity at that position.
@@ -439,6 +448,9 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   breaks_for10log <- 10^(-10:10)
   minor_breaksfor10log <- rep(1:9, 21)*(10^rep(-10:10, each=9))
   
+  save.image(file = str_c("../results/out/", experimentName, "/save_file", sample, ".rsave"))
+  stop()
+  
   p <- ggplot(depthInfo %>% filter(numberInsertions > 0) %>% arrange(desc(numberInsertions)), aes(x = 1:length(numberInsertions), y = numberInsertions, group = 1))
   p <- p + scale_y_log10() + geom_line() + theme_bw() + geom_vline(xintercept = expectedNumberOfInsertions)
   ggsave(plot = p, filename = str_c("../plots/", experimentName, "/", sample, "__numberInsertions.png"), width = 6, height = 4)
@@ -466,7 +478,7 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   #   x <- x %>% count(InsertionPosition) %>% filter(n > 20) %>% dim() %>% magrittr::extract2(1)
   #   return(x)
   # }))
-  
+
   # NEW. We create tmpExpected hits to include the data from the 94 most abundant barcodes (using head(expectedNumberOfInsertions))
   tmpExpectedHits <- tmp %>% arrange(desc(numReads)) %>% head(expectedNumberOfInsertions) %>% mutate(uniqueInsertionEventsCountedByBarcode = map(data, function(x) {
     #print(x)
@@ -474,6 +486,7 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
     return(x)
   }))
   results <- list()
+  
   for (i in c(1,2,3,4,5, 10, 20, 30, 40, 50, 75, 100, 200, 500)){
     print(i)
     tmpp <- tmpExpectedHits %>% mutate(uniqueInsertionEventsCountedByBarcode = map_dbl(uniqueInsertionEventsCountedByBarcode, function(x){
@@ -496,13 +509,12 @@ for (sample in gsub(pattern = "[.]fastq", replacement = "", x = list.files(str_c
   
   # Save files for manual interrogation later, clean up and go on.
   #save(sample, depthInfo, ORFEssentiallityUsingTAs, barcodesOverGenome, readInsertionWithBarcodes, file = str_c("../results/out/", experimentName, "/save_file", sample, ".rsave"))
-  save.image(file = str_c("../results/out/", experimentName, "/save_file", sample, ".rsave"))
   #rm(depthInfo)
   #rm(ORFEssentiallityUsingTAs)
   #rm(barcodesOverGenome)
   #rm(readInsertionWithBarcodes)
   gc()
-}
+#}
 
 
 #how many unique barcodes for a certain number of reads? Automate this at some point! Where x = 2000, 1000, 500 etc 
