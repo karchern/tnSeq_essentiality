@@ -2,6 +2,7 @@ library(tidyverse)
 library(ggembl)
 library(patchwork)
 library(ggrepel)
+library(ggembl)
 
 if (rstudioapi::isAvailable()) {
   print("We are within Rstudio, so mounted.")
@@ -134,7 +135,8 @@ experimentName <- commandArgs(trailingOnly = T)[2]
   # IMPORTANT: This is NOT a final map of barcodes -> insertion sites yet. To achieve this,
   # We need to remove barcodes that are 'good' for more than one position (this can happen in multiple integration events!)
   
-  readInsertionWithBarcodes <- readInsertion
+  readInsertionWithBarcodes <- readInsertion %>%
+    select(-Position) # This is the RAW position that is not correct (isn;'t corrected for strandedness yet)!!
   
   barcodesOverGenome <- readInsertion %>% 
     filter(!is.na(barcode)) %>% 
@@ -448,6 +450,8 @@ experimentName <- commandArgs(trailingOnly = T)[2]
   breaks_for10log <- 10^(-10:10)
   minor_breaksfor10log <- rep(1:9, 21)*(10^rep(-10:10, each=9))
   
+  tmp <- readInsertionWithBarcodes %>% group_by(barcode) %>% nest() %>% mutate(numReads = map_dbl(data, function(x) dim(x)[1])) %>% arrange(desc(numReads))
+  tmp2 <- readInsertionWithBarcodes %>% group_by(InsertionPosition) %>% nest() %>% mutate(numReads = map_dbl(data, function(x) dim(x)[1])) %>% arrange(desc(numReads))
   save.image(file = str_c("../results/out/", experimentName, "/save_file", sample, ".rsave"))
   stop()
   
@@ -457,17 +461,22 @@ experimentName <- commandArgs(trailingOnly = T)[2]
   #plots[[length(plots) + 1]] <- p
   
   # Get also total barcode counts ... 
-  tmp <- readInsertionWithBarcodes %>% group_by(barcode) %>% nest() %>% mutate(numReads = map_dbl(data, function(x) dim(x)[1])) %>% arrange(desc(numReads))
   #p <- ggplot(tmp, aes(x = numBarcodes)) + geom_histogram(bins = 100)
   p <- ggplot(tmp, aes(x = numReads)) + geom_histogram(bins = 100) + scale_x_log10() + annotation_logticks()
   ggsave(plot = p, filename = str_c("../plots/", experimentName, "/", sample, "__barCodeCount.png"), width = 6, height = 4)
   
   # ... and also an ordered lineplot
   p <- ggplot(tmp, aes(x = 1:length(numReads), y = numReads, group - 1)) + geom_line() + scale_y_log10(breaks = breaks_for10log, minor_breaks = minor_breaksfor10log)
-  p <- p + geom_vline(xintercept = expectedNumberOfInsertions)
-  p <- p + scale_x_log10(breaks = breaks_for10log, minor_breaks = minor_breaksfor10log) + xlab("unique Barcodes") + annotation_logticks()
+  #p <- p + geom_vline(xintercept = expectedNumberOfInsertions)
+  p <- p + scale_x_log10(breaks = breaks_for10log, minor_breaks = minor_breaksfor10log) + xlab("Barcodes") + annotation_logticks()
   p <- p + theme_bw()
   ggsave(plot = p, filename = str_c("../plots/", experimentName, "/", sample, "__barCodeCountAsLinePlot.png"), width = 6, height = 4)
+  
+  p <- ggplot(tmp2, aes(x = 1:length(numReads), y = numReads, group - 1)) + geom_line() + scale_y_log10(breaks = breaks_for10log, minor_breaks = minor_breaksfor10log)
+  #p <- p + geom_vline(xintercept = expectedNumberOfInsertions)
+  p <- p + scale_x_log10(breaks = breaks_for10log, minor_breaks = minor_breaksfor10log) + xlab("Insertions") + annotation_logticks()
+  p <- p + theme_bw()
+  ggsave(plot = p, filename = str_c("../plots/", experimentName, "/", sample, "__insertionCountAsLinePlot.png"), width = 6, height = 4)
   
   # And finally the last plot: For the [expectedNumberOfInsertions] top-most represented barcodes, count 
   # in how many unique sites you find it!
@@ -480,14 +489,17 @@ experimentName <- commandArgs(trailingOnly = T)[2]
   # }))
 
   # NEW. We create tmpExpected hits to include the data from the 94 most abundant barcodes (using head(expectedNumberOfInsertions))
-  tmpExpectedHits <- tmp %>% arrange(desc(numReads)) %>% head(expectedNumberOfInsertions) %>% mutate(uniqueInsertionEventsCountedByBarcode = map(data, function(x) {
+  tmpExpectedHits <- tmp %>% 
+    arrange(desc(numReads)) %>% 
+    head(expectedNumberOfInsertions) %>% 
+    mutate(uniqueInsertionEventsCountedByBarcode = map(data, function(x) {
     #print(x)
     x <- x %>% count(InsertionPosition)
     return(x)
   }))
   results <- list()
   
-  for (i in c(1,2,3,4,5, 10, 20, 30, 40, 50, 75, 100, 200, 500)){
+  for (i in c(5, 10, 20, 30, 50, 75, 100, 200, 500, 1500, 5000)){
     print(i)
     tmpp <- tmpExpectedHits %>% mutate(uniqueInsertionEventsCountedByBarcode = map_dbl(uniqueInsertionEventsCountedByBarcode, function(x){
       x %>% filter(n > i) %>% dim() %>% magrittr::extract2(1)
@@ -495,25 +507,118 @@ experimentName <- commandArgs(trailingOnly = T)[2]
     results[[length(results) + 1]] <- tmpp
   }
   results <- do.call('rbind', results)
+  results <- results %>% 
+    group_by(threshold) %>% 
+    count(uniqueInsertionEventsCountedByBarcode) %>%
+    mutate(threshold = map_chr(threshold, function(x) return(str_c("Threshold: ", x, sep = "", collapse = ""))))
+  results$threshold <- factor(results$threshold, levels = unique(results$threshold))
+  # results <- results %>%
+  #   mutate(threshold = factor(threshold, levels = unique(threshold)))
   
-  p <- ggplot(results %>% group_by(threshold) %>% 
-                count(uniqueInsertionEventsCountedByBarcode), aes(x = uniqueInsertionEventsCountedByBarcode, y = n)) + 
+  p <- ggplot(results, aes(x = uniqueInsertionEventsCountedByBarcode, y = n)) + 
     geom_bar(stat = 'identity', fill = "steelblue")
-  p <- p + geom_text(aes(label = n, y = (n)), nudge_y = 15)
-  p <- p + geom_text(aes(label = '', y = (n)), nudge_y = 30)
+  #p <- p + geom_text(aes(label = n, y = (n)), nudge_y = 15)
+  #p <- p + geom_text(aes(label = '', y = (n)), nudge_y = 30)
   p <- p + facet_wrap(.~threshold,
-                      nrow = length(unique(results$threshold)) , scales = 'free')
+                      nrow = round(length(unique(results$threshold))/3) , scales = 'free')
   p <- p + scale_x_continuous(breaks = 0:10)
-  p <- p + ylab("Count")
-  ggsave(filename = str_c("../plots/", experimentName, "/", sample, "__distinctInsertionEventsPerBarcode.png"), width = 6, height = 12)
+  p <- p + ylab("Count") + xlab("Insertions/Barcode")
+  p <- p + theme_embl()
+  ggsave(filename = str_c("../plots/", experimentName, "/", sample, "__distinctInsertionEventsPerBarcode.png"), width = 8, height = 8)
   
-  # Save files for manual interrogation later, clean up and go on.
-  #save(sample, depthInfo, ORFEssentiallityUsingTAs, barcodesOverGenome, readInsertionWithBarcodes, file = str_c("../results/out/", experimentName, "/save_file", sample, ".rsave"))
-  #rm(depthInfo)
-  #rm(ORFEssentiallityUsingTAs)
-  #rm(barcodesOverGenome)
-  #rm(readInsertionWithBarcodes)
-  gc()
+  # WEIRD MULTI-INTEGRATION ISSUE FROM START OF 2022. 
+  # DIAGNOSTICS
+  # get integration coordinates over barcodes withm ore than 100 integrations
+  readInsertionWithBarcodes %>% 
+    filter(barcode %in% (results %>% filter(uniqueInsertionEventsCountedByBarcode>100) %>% 
+                           pull(barcode))) %>% 
+    group_by(barcode, InsertionPosition) %>% 
+    tally() %>% 
+    arrange(desc(n)) %>% 
+    ggplot(aes(x = InsertionPosition, y = n)) + geom_point() + facet_wrap(.~barcode, nrow = 10) + ggsave(filename = str_c("../plots/", experimentName, "_weird_barcodes_coords_over_genome.png"), width = 10, height = 30)
+
+  # Get barcode diversity vs TA site saturation plot
+  resMax <- 100
+  readInsertionWithBarcodes$rand <- sample(x = 1:resMax, size = dim(readInsertionWithBarcodes)[1], replace = T)
+  # meanBarcodeCount <- readInsertionWithBarcodes %>%
+  #   group_by(barcode) %>%
+  #   tally() %>% 
+  #   pull(n) %>%
+  #   mean()
+  r <- list()
+  for (i in 1:resMax){
+    print(i)
+    tt <- readInsertionWithBarcodes %>% 
+      filter(rand <= i) %>%
+      group_by(barcode) %>%
+      nest() %>%
+      mutate(n = map_dbl(data, function(x) dim(x)[1]))
+      #filter(n > 1)
+    numBarcodes <- tt %>%
+      dim() %>%
+      magrittr::extract(1)
+    fracTAs <- tt %>%
+      unnest() %>%
+      pull(InsertionPosition) %>%
+      unique() %>%
+      length()
+    r[[length(r) + 1]] <- c(numBarcodes, fracTAs)
+  }
+  r <- do.call('rbind', r)
+  colnames(r) <- c("Number of barcodes", "TAs hit")
+  r <- r %>%
+    as.data.frame() %>%
+    mutate(`Fraction of TAs hit` = `TAs hit` / sum(depthInfo$TA)) %>%
+    as_tibble()
+  r$`Percentage of reads` <- 1:resMax 
+  p <- ggplot(r, aes(x = `Fraction of TAs hit`, y = `Number of barcodes`)) + 
+    geom_point() +
+    theme_embl()
+  ggsave(filename = str_c("../plots/", experimentName, "/", sample, "__fractionTAsAgainstNumberBarcodes.png"), width = 5, height = 5)
+  r %>%
+    write_tsv(str_c("../results/out/", experimentName, "/", sample, "__fractionTAsAgainstNumberBarcodes.tsv"))
+  
+  
+  
+  # Get barcode diversity vs sequencing depth
+  resMax <- 100
+  readInsertionWithBarcodes$rand <- sample(x = 1:resMax, size = dim(readInsertionWithBarcodes)[1], replace = T)
+  # meanBarcodeCount <- readInsertionWithBarcodes %>%
+  #   group_by(barcode) %>%
+  #   tally() %>% 
+  #   pull(n) %>%
+  #   mean()
+  r <- list()
+  for (i in 1:resMax){
+    print(i)
+    tt <- readInsertionWithBarcodes %>% 
+      filter(rand <= i) %>%
+      group_by(barcode) %>%
+      nest() %>%
+      mutate(n = map_dbl(data, function(x) dim(x)[1]))
+      #filter(n > 1)
+    numBarcodes <- tt %>%
+      dim() %>%
+      magrittr::extract(1)
+    depth <- tt %>%
+      unnest() %>%
+      pull(InsertionPosition) %>%
+      length()
+    r[[length(r) + 1]] <- c(numBarcodes, depth)
+  }
+  r <- do.call('rbind', r)
+  colnames(r) <- c("Number of barcodes", "depth")
+  r <- r %>%
+    as.data.frame() %>%
+    #mutate(`Fraction of TAs hit` = `TAs hit` / sum(depthInfo$TA)) %>%
+    as_tibble()
+  r$`Percentage of reads` <- 1:resMax 
+  p <- ggplot(r, aes(x = `depth`, y = `Number of barcodes`)) + 
+    geom_point() +
+    theme_embl()
+  ggsave(filename = str_c("../plots/", experimentName, "/", sample, "__depthAgainstNumberBarcodes.png"), width = 5, height = 5)
+  r %>%
+    write_tsv(str_c("../results/out/", experimentName, "/", sample, "__depthAgainstNumberBarcodes.tsv"))
 #}
 
 
